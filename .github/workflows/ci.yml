@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      mongodb-atlas:
+        image: mongodb/mongodb-atlas-local:latest
+        ports:
+          - 27017:27017
+        env:
+          MONGODB_INITDB_ROOT_USERNAME: admin
+          MONGODB_INITDB_ROOT_PASSWORD: password
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          uv sync --extra all --extra dev
+
+      - name: Run Test Suite
+        env:
+          MONGO_URI: "mongodb://admin:password@localhost:27017/?authSource=admin"
+        run: |
+          uv run pytest
