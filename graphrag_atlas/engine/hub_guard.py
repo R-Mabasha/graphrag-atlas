@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from graphrag_atlas.core.database import DatabaseManager
 
 
@@ -17,7 +19,10 @@ class HubGuard:
         self._tenant = tenant_field
 
     async def filter_seeds(
-        self, tenant_id: str, candidate_entities: list[str]
+        self,
+        tenant_id: str,
+        candidate_entities: list[str],
+        project_id: str | None = None,
     ) -> list[str]:
         """
         Filters out candidate seed entities whose degree exceeds the hub threshold.
@@ -26,14 +31,15 @@ class HubGuard:
         if not candidate_entities:
             return []
 
-        cursor = self._db.entities.find(
-            {
-                self._tenant: tenant_id,
-                "canonical_name": {"$in": candidate_entities},
-                "degree": {"$gt": self._threshold},
-            },
-            {"canonical_name": 1, "degree": 1},
-        )
+        query: dict[str, Any] = {
+            self._tenant: tenant_id,
+            "canonical_name": {"$in": candidate_entities},
+            "degree": {"$gt": self._threshold},
+        }
+        if project_id is not None:
+            query["project_id"] = project_id
+
+        cursor = self._db.entities.find(query, {"canonical_name": 1, "degree": 1})
 
         hub_set: set[str] = set()
         async for doc in cursor:

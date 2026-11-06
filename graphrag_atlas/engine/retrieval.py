@@ -55,11 +55,16 @@ class HybridRetrievalEngine:
         query: str,
         limit: int = 25,
         include_archived: bool = False,
+        project_id: str | None = None,
     ) -> list[str]:
         """Search chunks using Atlas Search (Lucene BM25). Falls back to regex if index absent."""
         filter_conditions: list[dict[str, Any]] = [
             {"equals": {"path": self._tenant, "value": tenant_id}}
         ]
+        if project_id is not None:
+            filter_conditions.append(
+                {"equals": {"path": "project_id", "value": project_id}}
+            )
         if not include_archived:
             filter_conditions.append(
                 {"equals": {"path": "is_archived", "value": False}}
@@ -94,6 +99,8 @@ class HybridRetrievalEngine:
                 self._tenant: tenant_id,
                 "text": {"$regex": pattern, "$options": "i"},
             }
+            if project_id is not None:
+                find_filter["project_id"] = project_id
             if not include_archived:
                 find_filter["is_archived"] = {"$ne": True}
             cursor = self._db.chunks.find(find_filter, {"chunk_id": 1}).limit(limit)
@@ -105,9 +112,12 @@ class HybridRetrievalEngine:
         query_vector: list[float],
         limit: int = 25,
         include_archived: bool = False,
+        project_id: str | None = None,
     ) -> list[str]:
         """Search chunks using Atlas Vector Search ($vectorSearch)."""
         vector_filter: dict[str, Any] = {self._tenant: tenant_id}
+        if project_id is not None:
+            vector_filter["project_id"] = project_id
         if not include_archived:
             vector_filter["is_archived"] = {"$ne": True}
 
@@ -141,8 +151,9 @@ class HybridRetrievalEngine:
         top_k: int = 5,
         rerank_score_threshold: float = 0.05,
         include_archived: bool = False,
+        project_id: str | None = None,
     ) -> SearchResponse:
-        """Execute full hybrid retrieval pipeline."""
+        """Execute full hybrid retrieval pipeline with optional project scoping."""
         # 1. Embed query
         query_vector = await self._embedder.embed_text(query)
 
@@ -153,12 +164,14 @@ class HybridRetrievalEngine:
                 query,
                 limit=self._config.max_branching_per_hop,
                 include_archived=include_archived,
+                project_id=project_id,
             ),
             self._search_vector(
                 tenant_id,
                 query_vector,
                 limit=self._config.max_branching_per_hop,
                 include_archived=include_archived,
+                project_id=project_id,
             ),
         )
 
@@ -171,8 +184,14 @@ class HybridRetrievalEngine:
         # Also collect entities mentioned in the top 3 BM25/Vector chunks
         seed_chunk_ids = bm25_ids[:3] + vector_ids[:3]
         if seed_chunk_ids:
+            chunk_seed_filter: dict[str, Any] = {
+                self._tenant: tenant_id,
+                "chunk_id": {"$in": seed_chunk_ids},
+            }
+            if project_id is not None:
+                chunk_seed_filter["project_id"] = project_id
             cursor = self._db.chunks.find(
-                {self._tenant: tenant_id, "chunk_id": {"$in": seed_chunk_ids}},
+                chunk_seed_filter,
                 {"entities": 1},
             )
             async for doc in cursor:
@@ -187,8 +206,14 @@ class HybridRetrievalEngine:
                 if not self._domain.stoplist or w.upper() not in self._domain.stoplist
             ]
             if query_tokens:
+                ent_query: dict[str, Any] = {
+                    self._tenant: tenant_id,
+                    "canonical_name": {"$in": query_tokens},
+                }
+                if project_id is not None:
+                    ent_query["project_id"] = project_id
                 ent_cursor = self._db.entities.find(
-                    {self._tenant: tenant_id, "canonical_name": {"$in": query_tokens}},
+                    ent_query,
                     {"canonical_name": 1},
                 ).limit(self._config.max_graph_seeds)
                 async for ent_doc in ent_cursor:
@@ -196,7 +221,9 @@ class HybridRetrievalEngine:
 
         # 4. Hub Guard: Filter out super-nodes exceeding threshold
         safe_seeds = await self._hub_guard.filter_seeds(
-            tenant_id, list(candidate_seeds)[: self._config.max_graph_seeds]
+            tenant_id,
+            list(candidate_seeds)[: self._config.max_graph_seeds],
+            project_id=project_id,
         )
 
         # 5. Bounded Graph Traversal
@@ -205,6 +232,7 @@ class HybridRetrievalEngine:
             safe_seeds,
             limit=self._config.max_branching_per_hop,
             include_archived=include_archived,
+            project_id=project_id,
         )
 
         # 6. Graph-Expanded Chunks: Find chunks referencing discovered entities
@@ -214,6 +242,8 @@ class HybridRetrievalEngine:
                 self._tenant: tenant_id,
                 "entities": {"$in": discovered_entities},
             }
+            if project_id is not None:
+                g_filter["project_id"] = project_id
             if not include_archived:
                 g_filter["is_archived"] = {"$ne": True}
 
@@ -231,7 +261,9 @@ class HybridRetrievalEngine:
 
         top_candidates = fused_scored_tuples[:25]
         if not top_candidates:
-            return SearchResponse(query=query, tenant_id=tenant_id)
+            return SearchResponse(
+                query=query, tenant_id=tenant_id, project_id=project_id
+            )
 
         # Fetch chunk documents
         candidate_ids = [c_id for c_id, _ in top_candidates]
@@ -241,6 +273,8 @@ class HybridRetrievalEngine:
             self._tenant: tenant_id,
             "chunk_id": {"$in": candidate_ids},
         }
+        if project_id is not None:
+            c_filter["project_id"] = project_id
         if not include_archived:
             c_filter["is_archived"] = {"$ne": True}
 
@@ -300,8 +334,14 @@ class HybridRetrievalEngine:
         # 10. Community Context
         community_summaries: list[str] = []
         if discovered_entities:
+            comm_filter: dict[str, Any] = {
+                self._tenant: tenant_id,
+                "entities": {"$in": discovered_entities},
+            }
+            if project_id is not None:
+                comm_filter["project_id"] = project_id
             comm_cursor = self._db.communities.find(
-                {self._tenant: tenant_id, "entities": {"$in": discovered_entities}},
+                comm_filter,
                 {"summary": 1},
             ).limit(2)
             async for c_doc in comm_cursor:
@@ -310,6 +350,7 @@ class HybridRetrievalEngine:
         return SearchResponse(
             query=query,
             tenant_id=tenant_id,
+            project_id=project_id,
             passages=passages,
             graph_entities=list(discovered_entities)[:20],
             graph_edges=discovered_triples[:20],

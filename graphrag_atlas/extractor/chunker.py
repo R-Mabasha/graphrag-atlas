@@ -17,7 +17,11 @@ class HeadingAwareChunker:
         self._heading_re = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 
     def chunk_document(
-        self, text: str, document_id: str, tenant_id: str
+        self,
+        text: str,
+        document_id: str,
+        tenant_id: str,
+        project_id: str | None = None,
     ) -> list[Chunk]:
         """Split document text into chunks with breadcrumb metadata."""
         lines = text.splitlines()
@@ -48,6 +52,7 @@ class HeadingAwareChunker:
                             chunk_id=f"{document_id}:{chunk_idx}",
                             document_id=document_id,
                             tenant_id=tenant_id,
+                            project_id=project_id,
                             text=chunk_text,
                             content_hash=hashlib.sha256(
                                 chunk_text.encode("utf-8")
@@ -82,6 +87,7 @@ class HeadingAwareChunker:
                         chunk_id=f"{document_id}:{chunk_idx}",
                         document_id=document_id,
                         tenant_id=tenant_id,
+                        project_id=project_id,
                         text=chunk_text,
                         content_hash=hashlib.sha256(
                             chunk_text.encode("utf-8")

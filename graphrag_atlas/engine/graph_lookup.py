@@ -27,6 +27,7 @@ class GraphLookupEngine:
         seed_entities: list[str],
         limit: int = 30,
         include_archived: bool = False,
+        project_id: str | None = None,
     ) -> tuple[list[str], list[Triple]]:
         """
         Traverses outbound and inbound relationships from seed entities up to max_depth hops.
@@ -37,6 +38,8 @@ class GraphLookupEngine:
             return [], []
 
         base_match: dict[str, Any] = {self._tenant: tenant_id}
+        if project_id is not None:
+            base_match["project_id"] = project_id
         if not include_archived:
             base_match["is_archived"] = {"$ne": True}
 

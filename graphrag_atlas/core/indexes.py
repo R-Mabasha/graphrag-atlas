@@ -30,6 +30,14 @@ class IndexManager:
             IndexModel(
                 [
                     (self._tenant, ASCENDING),
+                    ("project_id", ASCENDING),
+                    ("document_id", ASCENDING),
+                ],
+                name="tenant_project_doc_idx",
+            ),
+            IndexModel(
+                [
+                    (self._tenant, ASCENDING),
                     ("document_id", ASCENDING),
                     ("content_hash", ASCENDING),
                 ],
@@ -38,6 +46,14 @@ class IndexManager:
             IndexModel(
                 [(self._tenant, ASCENDING), ("entities", ASCENDING)],
                 name="tenant_entities_multikey_idx",
+            ),
+            IndexModel(
+                [
+                    (self._tenant, ASCENDING),
+                    ("project_id", ASCENDING),
+                    ("entities", ASCENDING),
+                ],
+                name="tenant_project_entities_multikey_idx",
             ),
             IndexModel(
                 [
@@ -126,8 +142,15 @@ class IndexManager:
         doc_indexes = [
             IndexModel(
                 [(self._tenant, ASCENDING), ("document_id", ASCENDING)],
-                unique=True,
-                name="tenant_doc_unique",
+                name="tenant_doc_idx",
+            ),
+            IndexModel(
+                [
+                    (self._tenant, ASCENDING),
+                    ("project_id", ASCENDING),
+                    ("document_id", ASCENDING),
+                ],
+                name="tenant_project_doc_idx",
             ),
             IndexModel(
                 [(self._tenant, ASCENDING), ("content_hash", ASCENDING)],
@@ -142,7 +165,9 @@ class IndexManager:
             try:
                 from pymongo.operations import SearchIndexModel
 
-                search_spec = self.get_atlas_search_index_spec(index_name="default_search")
+                search_spec = self.get_atlas_search_index_spec(
+                    index_name="default_search"
+                )
                 vector_spec = self.get_atlas_vector_index_spec(
                     dimension=dimension, index_name="default_vector"
                 )
@@ -158,8 +183,12 @@ class IndexManager:
                         type=vector_spec.get("type", "vectorSearch"),
                     ),
                 ]
-                created_search = await self._db.chunks.create_search_indexes(search_models)
-                results["search_indexes"] = list(created_search) if created_search else []
+                created_search = await self._db.chunks.create_search_indexes(
+                    search_models
+                )
+                results["search_indexes"] = (
+                    list(created_search) if created_search else []
+                )
             except (PyMongoError, TypeError, AttributeError):
                 # Local mock or un-supported tier fallback
                 results["search_indexes"] = []
@@ -183,6 +212,7 @@ class IndexManager:
                     "fields": {
                         "text": {"type": "string", "analyzer": "lucene.standard"},
                         "tenant_id": {"type": "stringFacet"},
+                        "project_id": {"type": "stringFacet"},
                     },
                 }
             },
@@ -211,6 +241,7 @@ class IndexManager:
                         "similarity": similarity,
                     },
                     {"type": "filter", "path": "tenant_id"},
+                    {"type": "filter", "path": "project_id"},
                 ]
             },
         }

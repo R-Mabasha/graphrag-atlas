@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from graphrag_atlas.core.config import AtlasConfig
 from graphrag_atlas.core.database import DatabaseManager
@@ -94,12 +94,14 @@ class AtlasGraphRAG:
         file_path: str | Path | None = None,
         text: str | None = None,
         tenant_id: str = "default",
+        project_id: str | None = None,
         document_id: str | None = None,
         force_reingest: bool = False,
     ) -> str:
         """
         Ingest a document or text into the MongoDB Atlas Hybrid Graph store.
         Performs content-hashing, chunking, embedding, and AST+semantic graph extraction.
+        Supports two-tier tenancy with optional project_id scoping.
         """
         if not file_path and not text:
             raise ValueError("Either file_path or text must be provided.")
@@ -127,7 +129,9 @@ class AtlasGraphRAG:
 
         # 1. Check content hash for deduplication and versioning
         content_hash = self._lifecycle.hash_content(raw_text.encode("utf-8"))
-        existing = await self._lifecycle.get_document(tenant_id, document_id)
+        existing = await self._lifecycle.get_document(
+            tenant_id, document_id, project_id=project_id
+        )
         doc_version = 1
         cached_chunks: dict[str, dict] = {}
 
@@ -138,18 +142,27 @@ class AtlasGraphRAG:
 
             # Fetch existing chunks for incremental chunk-level caching
             if not force_reingest:
-                async for c_doc in self._db.chunks.find(
-                    {self._tenant_field: tenant_id, "document_id": document_id}
-                ):
+                chunk_q: dict[str, Any] = {
+                    self._tenant_field: tenant_id,
+                    "document_id": document_id,
+                }
+                if project_id is not None:
+                    chunk_q["project_id"] = project_id
+                async for c_doc in self._db.chunks.find(chunk_q):
                     if c_doc.get("content_hash"):
                         cached_chunks[c_doc["content_hash"]] = c_doc
 
             # Clear previous version artifacts cleanly
-            await self._lifecycle.delete_document(tenant_id, document_id)
+            await self._lifecycle.delete_document(
+                tenant_id, document_id, project_id=project_id
+            )
 
         # 2. Chunking with heading breadcrumbs
         chunks = self._chunker.chunk_document(
-            raw_text, document_id=document_id, tenant_id=tenant_id
+            raw_text,
+            document_id=document_id,
+            tenant_id=tenant_id,
+            project_id=project_id,
         )
         if not chunks:
             return document_id
@@ -205,46 +218,71 @@ class AtlasGraphRAG:
         chunk_docs = [c.model_dump() for c in chunks]
         for c_doc in chunk_docs:
             c_doc[self._tenant_field] = tenant_id
+            if project_id is not None:
+                c_doc["project_id"] = project_id
         if chunk_docs:
             await self._db.chunks.insert_many(chunk_docs)
 
         # 7. Upsert Edges with Weight Reinforcement (eliminates duplicate edge rows)
         now = datetime.now(timezone.utc).isoformat()
         for tr in all_triples:
+            edge_filter: dict[str, Any] = {
+                self._tenant_field: tenant_id,
+                "source": tr.source,
+                "relation": tr.relation,
+                "target": tr.target,
+            }
+            if project_id is not None:
+                edge_filter["project_id"] = project_id
+
+            set_fields: dict[str, Any] = {"is_archived": False, "updated_at": now}
+            if project_id is not None:
+                set_fields["project_id"] = project_id
+
+            on_insert: dict[str, Any] = {
+                self._tenant_field: tenant_id,
+                "source": tr.source,
+                "relation": tr.relation,
+                "target": tr.target,
+                "created_at": now,
+            }
+            if project_id is not None:
+                on_insert["project_id"] = project_id
+
             await self._db.edges.update_one(
-                {
-                    self._tenant_field: tenant_id,
-                    "source": tr.source,
-                    "relation": tr.relation,
-                    "target": tr.target,
-                },
+                edge_filter,
                 {
                     "$inc": {"weight": tr.weight},
                     "$addToSet": {"document_ids": document_id},
-                    "$set": {"is_archived": False, "updated_at": now},
-                    "$setOnInsert": {
-                        self._tenant_field: tenant_id,
-                        "source": tr.source,
-                        "relation": tr.relation,
-                        "target": tr.target,
-                        "created_at": now,
-                    },
+                    "$set": set_fields,
+                    "$setOnInsert": on_insert,
                 },
                 upsert=True,
             )
 
         # 8. Upsert Entities
         for ent_name, added_degree in entity_degrees.items():
+            ent_filter: dict[str, Any] = {
+                self._tenant_field: tenant_id,
+                "canonical_name": ent_name,
+            }
+            if project_id is not None:
+                ent_filter["project_id"] = project_id
+
+            ent_insert: dict[str, Any] = {
+                self._tenant_field: tenant_id,
+                "name": ent_name,
+                "canonical_name": ent_name,
+                "entity_type": "CONCEPT",
+            }
+            if project_id is not None:
+                ent_insert["project_id"] = project_id
+
             await self._db.entities.update_one(
-                {self._tenant_field: tenant_id, "canonical_name": ent_name},
+                ent_filter,
                 {
                     "$inc": {"degree": added_degree, "mentions": 1},
-                    "$setOnInsert": {
-                        self._tenant_field: tenant_id,
-                        "name": ent_name,
-                        "canonical_name": ent_name,
-                        "entity_type": "CONCEPT",
-                    },
+                    "$setOnInsert": ent_insert,
                 },
                 upsert=True,
             )
@@ -252,6 +290,7 @@ class AtlasGraphRAG:
         # 9. Record Document Metadata
         await self._lifecycle.record_document(
             tenant_id=tenant_id,
+            project_id=project_id,
             document_id=document_id,
             file_name=file_name,
             content_hash=content_hash,
@@ -269,6 +308,7 @@ class AtlasGraphRAG:
         file_path: str | Path | None = None,
         text: str | None = None,
         tenant_id: str = "default",
+        project_id: str | None = None,
         document_id: str | None = None,
         force: bool = True,
     ) -> str:
@@ -280,36 +320,52 @@ class AtlasGraphRAG:
             file_path=file_path,
             text=text,
             tenant_id=tenant_id,
+            project_id=project_id,
             document_id=document_id,
             force_reingest=force,
         )
 
     async def archive_document(
-        self, tenant_id: str, document_id: str, reason: str = ""
+        self,
+        tenant_id: str,
+        document_id: str,
+        reason: str = "",
+        project_id: str | None = None,
     ) -> bool:
         """
         Soft-delete / archive a document. Excludes its chunks and relationships
         from standard retrieval and recalibrates active entity degrees.
         """
         return await self._lifecycle.archive_document(
-            tenant_id=tenant_id, document_id=document_id, reason=reason
+            tenant_id=tenant_id,
+            document_id=document_id,
+            reason=reason,
+            project_id=project_id,
         )
 
-    async def restore_document(self, tenant_id: str, document_id: str) -> bool:
+    async def restore_document(
+        self, tenant_id: str, document_id: str, project_id: str | None = None
+    ) -> bool:
         """Restore a previously archived document and re-activate its chunks and relationships."""
         return await self._lifecycle.restore_document(
-            tenant_id=tenant_id, document_id=document_id
+            tenant_id=tenant_id, document_id=document_id, project_id=project_id
         )
 
-    async def get_tenant_stats(self, tenant_id: str = "default") -> TenantStats:
-        """Compute full storage, document status, and graph diagnostics for a tenant."""
+    async def get_tenant_stats(
+        self, tenant_id: str = "default", project_id: str | None = None
+    ) -> TenantStats:
+        """Compute full storage, document status, and graph diagnostics for a tenant or project."""
         return await self._lifecycle.get_tenant_stats(
-            tenant_id=tenant_id, hub_threshold=self._config.hub_degree_threshold
+            tenant_id=tenant_id,
+            hub_threshold=self._config.hub_degree_threshold,
+            project_id=project_id,
         )
 
-    async def vacuum(self, tenant_id: str = "default") -> dict[str, int]:
+    async def vacuum(
+        self, tenant_id: str = "default", project_id: str | None = None
+    ) -> dict[str, int]:
         """Perform graph integrity repair, orphan entity cleanup, and degree recalibration."""
-        return await self._lifecycle.vacuum(tenant_id=tenant_id)
+        return await self._lifecycle.vacuum(tenant_id=tenant_id, project_id=project_id)
 
     async def list_documents(
         self,
@@ -317,24 +373,33 @@ class AtlasGraphRAG:
         status: Literal["active", "archived", "all"] = "active",
         limit: int = 50,
         skip: int = 0,
+        project_id: str | None = None,
     ) -> list[DocumentInfo]:
-        """List documents for a tenant with status filtering and pagination."""
+        """List documents for a tenant with status filtering, optional project scoping, and pagination."""
         return await self._lifecycle.list_documents(
-            tenant_id=tenant_id, status=status, limit=limit, skip=skip
+            tenant_id=tenant_id,
+            status=status,
+            limit=limit,
+            skip=skip,
+            project_id=project_id,
         )
 
     async def get_document(
-        self, tenant_id: str = "default", document_id: str = ""
+        self,
+        tenant_id: str = "default",
+        document_id: str = "",
+        project_id: str | None = None,
     ) -> dict | None:
         """Retrieve existing document record metadata."""
         return await self._lifecycle.get_document(
-            tenant_id=tenant_id, document_id=document_id
+            tenant_id=tenant_id, document_id=document_id, project_id=project_id
         )
 
     async def search(
         self,
         query: str,
         tenant_id: str = "default",
+        project_id: str | None = None,
         top_k: int = 5,
         rerank_score_threshold: float = 0.05,
         include_archived: bool = False,
@@ -343,6 +408,7 @@ class AtlasGraphRAG:
         return await self._retrieval.search(
             query=query,
             tenant_id=tenant_id,
+            project_id=project_id,
             top_k=top_k,
             rerank_score_threshold=rerank_score_threshold,
             include_archived=include_archived,
@@ -352,9 +418,16 @@ class AtlasGraphRAG:
         """Trigger modularity graph partitioning and LLM subsystem summarization."""
         return await self._community_detector.detect_and_summarize(tenant_id)
 
-    async def delete_document(self, tenant_id: str, document_id: str) -> dict[str, int]:
+    async def delete_document(
+        self,
+        tenant_id: str,
+        document_id: str,
+        project_id: str | None = None,
+    ) -> dict[str, int]:
         """Cascading delete of document chunks, edges, and orphan entities."""
-        return await self._lifecycle.delete_document(tenant_id, document_id)
+        return await self._lifecycle.delete_document(
+            tenant_id, document_id, project_id=project_id
+        )
 
     async def close(self) -> None:
         """Close MongoDB database client connections."""

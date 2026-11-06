@@ -46,6 +46,9 @@ class Chunk(BaseModel):
     )
     document_id: str = Field(..., description="Parent document identifier")
     tenant_id: str = Field(..., description="Tenant partition identifier")
+    project_id: str | None = Field(
+        default=None, description="Optional sub-partition project identifier"
+    )
     text: str = Field(..., description="Raw text content of the chunk")
     heading_breadcrumbs: list[str] = Field(
         default_factory=list, description="Section heading hierarchy"
@@ -89,6 +92,9 @@ class Community(BaseModel):
 
     community_id: str = Field(..., description="Unique community ID")
     tenant_id: str = Field(..., description="Tenant identifier")
+    project_id: str | None = Field(
+        default=None, description="Optional sub-partition project identifier"
+    )
     title: str = Field(..., description="High-level topic or subsystem title")
     summary: str = Field(..., description="LLM synthesis of community responsibilities")
     entities: list[str] = Field(default_factory=list, description="Member entities")
@@ -100,6 +106,9 @@ class SearchResponse(BaseModel):
 
     query: str
     tenant_id: str
+    project_id: str | None = Field(
+        default=None, description="Optional sub-partition project identifier"
+    )
     passages: list[Passage] = Field(default_factory=list)
     graph_entities: list[str] = Field(default_factory=list)
     graph_edges: list[Triple] = Field(default_factory=list)
@@ -112,6 +121,9 @@ class DocumentInfo(BaseModel):
 
     document_id: str
     tenant_id: str
+    project_id: str | None = Field(
+        default=None, description="Optional sub-partition project identifier"
+    )
     file_name: str
     content_hash: str
     chunk_count: int
@@ -132,6 +144,9 @@ class TenantStats(BaseModel):
     """Comprehensive storage and lifecycle diagnostics for a tenant partition."""
 
     tenant_id: str
+    project_id: str | None = Field(
+        default=None, description="Optional sub-partition project identifier"
+    )
     total_documents: int
     active_documents: int
     archived_documents: int

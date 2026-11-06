@@ -22,11 +22,14 @@ class DocumentLifecycleManager:
         """Compute SHA-256 hex digest of file or text content."""
         return hashlib.sha256(data).hexdigest()
 
-    async def get_document(self, tenant_id: str, document_id: str) -> dict | None:
+    async def get_document(
+        self, tenant_id: str, document_id: str, project_id: str | None = None
+    ) -> dict | None:
         """Retrieve existing document record."""
-        return await self._db.documents.find_one(
-            {self._tenant: tenant_id, "document_id": document_id}
-        )
+        query = {self._tenant: tenant_id, "document_id": document_id}
+        if project_id is not None:
+            query["project_id"] = project_id
+        return await self._db.documents.find_one(query)
 
     async def list_documents(
         self,
@@ -34,9 +37,12 @@ class DocumentLifecycleManager:
         status: Literal["active", "archived", "all"] = "active",
         limit: int = 50,
         skip: int = 0,
+        project_id: str | None = None,
     ) -> list[DocumentInfo]:
-        """List documents for a tenant with status filtering and pagination."""
+        """List documents for a tenant with optional project filtering, status filtering, and pagination."""
         query: dict[str, Any] = {self._tenant: tenant_id}
+        if project_id is not None:
+            query["project_id"] = project_id
         if status in ("active", "archived"):
             query["status"] = status
 
@@ -63,14 +69,20 @@ class DocumentLifecycleManager:
         edge_count: int,
         version: int = 1,
         status: str = "active",
+        project_id: str | None = None,
     ) -> None:
         """Upsert document metadata."""
         now = datetime.now(timezone.utc).isoformat()
+        filter_doc = {self._tenant: tenant_id, "document_id": document_id}
+        if project_id is not None:
+            filter_doc["project_id"] = project_id
+
         await self._db.documents.update_one(
-            {self._tenant: tenant_id, "document_id": document_id},
+            filter_doc,
             {
                 "$set": {
                     self._tenant: tenant_id,
+                    "project_id": project_id,
                     "document_id": document_id,
                     "file_name": file_name,
                     "content_hash": content_hash,
@@ -86,18 +98,24 @@ class DocumentLifecycleManager:
             upsert=True,
         )
 
-    async def delete_document(self, tenant_id: str, document_id: str) -> dict[str, int]:
+    async def delete_document(
+        self, tenant_id: str, document_id: str, project_id: str | None = None
+    ) -> dict[str, int]:
         """
         Cascading delete: Removes document metadata, chunks, and edges.
         Performs orphan cleanup on entities with zero remaining edges or mentions.
         """
         filter_doc = {self._tenant: tenant_id, "document_id": document_id}
+        if project_id is not None:
+            filter_doc["project_id"] = project_id
 
         # 1. Collect entity names mentioned in edges and chunks before deletion
         edge_filter = {
             self._tenant: tenant_id,
             "$or": [{"document_id": document_id}, {"document_ids": document_id}],
         }
+        if project_id is not None:
+            edge_filter["project_id"] = project_id
         cursor = self._db.edges.find(edge_filter)
         impacted_entities: set[str] = set()
         edges_to_delete: list[Any] = []
@@ -170,7 +188,11 @@ class DocumentLifecycleManager:
         }
 
     async def archive_document(
-        self, tenant_id: str, document_id: str, reason: str = ""
+        self,
+        tenant_id: str,
+        document_id: str,
+        reason: str = "",
+        project_id: str | None = None,
     ) -> bool:
         """
         Soft-delete / Archive a document.
@@ -178,6 +200,8 @@ class DocumentLifecycleManager:
         so archived data is omitted from standard retrieval and hub calculations.
         """
         filter_doc = {self._tenant: tenant_id, "document_id": document_id}
+        if project_id is not None:
+            filter_doc["project_id"] = project_id
         doc = await self._db.documents.find_one(filter_doc)
         if not doc:
             return False
@@ -208,33 +232,44 @@ class DocumentLifecycleManager:
             impacted.add(e["target"])
 
         for ent in impacted:
-            active_edge_count = await self._db.edges.count_documents(
-                {
-                    self._tenant: tenant_id,
-                    "is_archived": {"$ne": True},
-                    "$or": [{"source": ent}, {"target": ent}],
-                }
-            )
-            active_chunk_count = await self._db.chunks.count_documents(
-                {
-                    self._tenant: tenant_id,
-                    "is_archived": {"$ne": True},
-                    "entities": ent,
-                }
-            )
+            edge_match: dict[str, Any] = {
+                self._tenant: tenant_id,
+                "is_archived": {"$ne": True},
+                "$or": [{"source": ent}, {"target": ent}],
+            }
+            chunk_match: dict[str, Any] = {
+                self._tenant: tenant_id,
+                "is_archived": {"$ne": True},
+                "entities": ent,
+            }
+            ent_match: dict[str, Any] = {
+                self._tenant: tenant_id,
+                "canonical_name": ent,
+            }
+            if project_id is not None:
+                edge_match["project_id"] = project_id
+                chunk_match["project_id"] = project_id
+                ent_match["project_id"] = project_id
+
+            active_edge_count = await self._db.edges.count_documents(edge_match)
+            active_chunk_count = await self._db.chunks.count_documents(chunk_match)
             await self._db.entities.update_one(
-                {self._tenant: tenant_id, "canonical_name": ent},
+                ent_match,
                 {"$set": {"degree": active_edge_count, "mentions": active_chunk_count}},
             )
 
         return True
 
-    async def restore_document(self, tenant_id: str, document_id: str) -> bool:
+    async def restore_document(
+        self, tenant_id: str, document_id: str, project_id: str | None = None
+    ) -> bool:
         """
         Restore a previously archived document back to active retrieval state.
         Re-activates chunks, edges, and restores entity degrees.
         """
         filter_doc = {self._tenant: tenant_id, "document_id": document_id}
+        if project_id is not None:
+            filter_doc["project_id"] = project_id
         doc = await self._db.documents.find_one(filter_doc)
         if not doc or doc.get("status") != "archived":
             return False
@@ -262,60 +297,72 @@ class DocumentLifecycleManager:
             impacted.add(e["target"])
 
         for ent in impacted:
-            active_edge_count = await self._db.edges.count_documents(
-                {
-                    self._tenant: tenant_id,
-                    "is_archived": {"$ne": True},
-                    "$or": [{"source": ent}, {"target": ent}],
-                }
-            )
-            active_chunk_count = await self._db.chunks.count_documents(
-                {
-                    self._tenant: tenant_id,
-                    "is_archived": {"$ne": True},
-                    "entities": ent,
-                }
-            )
+            edge_match = {
+                self._tenant: tenant_id,
+                "is_archived": {"$ne": True},
+                "$or": [{"source": ent}, {"target": ent}],
+            }
+            chunk_match = {
+                self._tenant: tenant_id,
+                "is_archived": {"$ne": True},
+                "entities": ent,
+            }
+            ent_match = {
+                self._tenant: tenant_id,
+                "canonical_name": ent,
+            }
+            if project_id is not None:
+                edge_match["project_id"] = project_id
+                chunk_match["project_id"] = project_id
+                ent_match["project_id"] = project_id
+
+            active_edge_count = await self._db.edges.count_documents(edge_match)
+            active_chunk_count = await self._db.chunks.count_documents(chunk_match)
             await self._db.entities.update_one(
-                {self._tenant: tenant_id, "canonical_name": ent},
+                ent_match,
                 {"$set": {"degree": active_edge_count, "mentions": active_chunk_count}},
             )
 
         return True
 
     async def get_tenant_stats(
-        self, tenant_id: str, hub_threshold: int = 200
+        self,
+        tenant_id: str,
+        hub_threshold: int = 200,
+        project_id: str | None = None,
     ) -> TenantStats:
-        """Compute full storage, document status, and graph diagnostics for a tenant."""
-        tenant_match = {self._tenant: tenant_id}
+        """Compute full storage, document status, and graph diagnostics for a tenant or project."""
+        tenant_match: dict[str, Any] = {self._tenant: tenant_id}
+        if project_id is not None:
+            tenant_match["project_id"] = project_id
 
         total_docs = await self._db.documents.count_documents(tenant_match)
-        archived_docs = await self._db.documents.count_documents(
-            {self._tenant: tenant_id, "status": "archived"}
-        )
+        archived_match = dict(tenant_match)
+        archived_match["status"] = "archived"
+        archived_docs = await self._db.documents.count_documents(archived_match)
         active_docs = total_docs - archived_docs
 
         total_chunks = await self._db.chunks.count_documents(tenant_match)
-        active_chunks = await self._db.chunks.count_documents(
-            {self._tenant: tenant_id, "is_archived": {"$ne": True}}
-        )
+        active_chunks_match = dict(tenant_match)
+        active_chunks_match["is_archived"] = {"$ne": True}
+        active_chunks = await self._db.chunks.count_documents(active_chunks_match)
 
         total_edges = await self._db.edges.count_documents(tenant_match)
-        active_edges = await self._db.edges.count_documents(
-            {self._tenant: tenant_id, "is_archived": {"$ne": True}}
-        )
+        active_edges_match = dict(tenant_match)
+        active_edges_match["is_archived"] = {"$ne": True}
+        active_edges = await self._db.edges.count_documents(active_edges_match)
 
         total_entities = await self._db.entities.count_documents(tenant_match)
 
         # Find hub nodes
-        hub_cursor = self._db.entities.find(
-            {self._tenant: tenant_id, "degree": {"$gt": hub_threshold}},
-            {"canonical_name": 1},
-        )
+        hub_match = dict(tenant_match)
+        hub_match["degree"] = {"$gt": hub_threshold}
+        hub_cursor = self._db.entities.find(hub_match, {"canonical_name": 1})
         hub_entities = [doc["canonical_name"] async for doc in hub_cursor]
 
         return TenantStats(
             tenant_id=tenant_id,
+            project_id=project_id,
             total_documents=total_docs,
             active_documents=active_docs,
             archived_documents=archived_docs,
@@ -327,65 +374,65 @@ class DocumentLifecycleManager:
             hub_entities=hub_entities,
         )
 
-    async def vacuum(self, tenant_id: str) -> dict[str, int]:
+    async def vacuum(
+        self, tenant_id: str, project_id: str | None = None
+    ) -> dict[str, int]:
         """
         Integrity repair & graph vacuuming:
         1. Prunes dangling edges whose parent document no longer exists.
         2. Recalculates exact degrees and mentions for all entities.
         3. Prunes orphan entities with 0 active mentions and 0 active edges.
         """
+        scope_match: dict[str, Any] = {self._tenant: tenant_id}
+        if project_id is not None:
+            scope_match["project_id"] = project_id
+
         # 1. Fetch valid document IDs
         valid_docs = set()
-        async for doc in self._db.documents.find(
-            {self._tenant: tenant_id}, {"document_id": 1}
-        ):
+        async for doc in self._db.documents.find(scope_match, {"document_id": 1}):
             valid_docs.add(doc["document_id"])
 
         # 2. Prune dangling edges
-        dangling_edges_res = await self._db.edges.delete_many(
-            {
-                self._tenant: tenant_id,
-                "document_id": {"$nin": list(valid_docs)},
-            }
-        )
+        del_edge_match = dict(scope_match)
+        del_edge_match["document_id"] = {"$nin": list(valid_docs)}
+        dangling_edges_res = await self._db.edges.delete_many(del_edge_match)
 
         # 3. Prune dangling chunks
-        dangling_chunks_res = await self._db.chunks.delete_many(
-            {
-                self._tenant: tenant_id,
-                "document_id": {"$nin": list(valid_docs)},
-            }
-        )
+        del_chunk_match = dict(scope_match)
+        del_chunk_match["document_id"] = {"$nin": list(valid_docs)}
+        dangling_chunks_res = await self._db.chunks.delete_many(del_chunk_match)
 
         # 4. Repair entity degrees and mentions
         recalibrated_entities = 0
         orphans_pruned = 0
 
-        async for ent_doc in self._db.entities.find({self._tenant: tenant_id}):
+        async for ent_doc in self._db.entities.find(scope_match):
             name = ent_doc["canonical_name"]
-            edge_count = await self._db.edges.count_documents(
-                {
-                    self._tenant: tenant_id,
-                    "is_archived": {"$ne": True},
-                    "$or": [{"source": name}, {"target": name}],
-                }
-            )
-            chunk_count = await self._db.chunks.count_documents(
-                {
-                    self._tenant: tenant_id,
-                    "is_archived": {"$ne": True},
-                    "entities": name,
-                }
-            )
+            edge_match = {
+                self._tenant: tenant_id,
+                "is_archived": {"$ne": True},
+                "$or": [{"source": name}, {"target": name}],
+            }
+            chunk_match = {
+                self._tenant: tenant_id,
+                "is_archived": {"$ne": True},
+                "entities": name,
+            }
+            ent_query = {self._tenant: tenant_id, "canonical_name": name}
+            if project_id is not None:
+                edge_match["project_id"] = project_id
+                chunk_match["project_id"] = project_id
+                ent_query["project_id"] = project_id
+
+            edge_count = await self._db.edges.count_documents(edge_match)
+            chunk_count = await self._db.chunks.count_documents(chunk_match)
 
             if edge_count == 0 and chunk_count == 0:
-                await self._db.entities.delete_one(
-                    {self._tenant: tenant_id, "canonical_name": name}
-                )
+                await self._db.entities.delete_one(ent_query)
                 orphans_pruned += 1
             else:
                 await self._db.entities.update_one(
-                    {self._tenant: tenant_id, "canonical_name": name},
+                    ent_query,
                     {"$set": {"degree": edge_count, "mentions": chunk_count}},
                 )
                 recalibrated_entities += 1

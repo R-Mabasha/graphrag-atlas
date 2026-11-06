@@ -620,3 +620,181 @@ async def test_entity_token_seed_fallback():
     assert resp is not None
     # Verify the chunk linked to ReconciliationWorker was discovered via entity token fallback
     assert any("ReconciliationWorker" in p.text for p in resp.passages)
+
+
+@pytest.mark.asyncio
+async def test_two_tier_tenancy_isolation():
+    rag = AtlasGraphRAG(mongo_uri="mongodb://localhost:27017", provider="mock")
+    mock_db = MockDBManager()
+    rag._db = mock_db
+    rag._lifecycle = DocumentLifecycleManager(mock_db, tenant_field=rag._tenant_field)
+    rag._chunker = HeadingAwareChunker(target_chunk_size=100)
+    rag._retrieval = HybridRetrievalEngine(
+        db_manager=mock_db,
+        embedder=rag._embedder,
+        domain_pack=rag._domain,
+        config=rag._config,
+        reranker=rag._reranker,
+        tenant_field=rag._tenant_field,
+    )
+
+    # Ingest Doc A (Org1, Proj A)
+    await rag.ingest(
+        tenant_id="org1",
+        project_id="proj_a",
+        document_id="doc_a",
+        text="Alpha project confidential revenue report.",
+    )
+
+    # Ingest Doc B (Org1, Proj B)
+    await rag.ingest(
+        tenant_id="org1",
+        project_id="proj_b",
+        document_id="doc_b",
+        text="Beta project confidential engineering specifications.",
+    )
+
+    # Ingest Doc C (Org2, Proj A)
+    await rag.ingest(
+        tenant_id="org2",
+        project_id="proj_a",
+        document_id="doc_c",
+        text="External company confidential financial records.",
+    )
+
+    # 1. Scoped search for Org1 / Proj A -> Should match ONLY doc_a
+    res_a = await rag.search(
+        query="confidential",
+        tenant_id="org1",
+        project_id="proj_a",
+        top_k=5,
+    )
+    assert res_a.tenant_id == "org1"
+    assert res_a.project_id == "proj_a"
+    assert len(res_a.passages) > 0
+    assert any("Alpha" in p.text for p in res_a.passages)
+    assert not any("Beta" in p.text for p in res_a.passages)
+    assert not any("External" in p.text for p in res_a.passages)
+
+    # 2. Scoped search for Org1 / Proj B -> Should match ONLY doc_b
+    res_b = await rag.search(
+        query="confidential",
+        tenant_id="org1",
+        project_id="proj_b",
+        top_k=5,
+    )
+    assert res_b.tenant_id == "org1"
+    assert res_b.project_id == "proj_b"
+    assert len(res_b.passages) > 0
+    assert any("Beta" in p.text for p in res_b.passages)
+    assert not any("Alpha" in p.text for p in res_b.passages)
+    assert not any("External" in p.text for p in res_b.passages)
+
+    # 3. Cross-project search for Org1 (project_id=None) -> Matches doc_a AND doc_b, ZERO from Org2
+    res_org1 = await rag.search(
+        query="confidential",
+        tenant_id="org1",
+        project_id=None,
+        top_k=5,
+    )
+    assert res_org1.tenant_id == "org1"
+    assert res_org1.project_id is None
+    assert any("Alpha" in p.text for p in res_org1.passages)
+    assert any("Beta" in p.text for p in res_org1.passages)
+    assert not any("External" in p.text for p in res_org1.passages)
+
+
+@pytest.mark.asyncio
+async def test_two_tier_lifecycle_scoping():
+    db = MockDBManager()
+    mgr = DocumentLifecycleManager(db, tenant_field="tenant_id")
+
+    # Record documents across tenants and projects
+    await mgr.record_document(
+        tenant_id="org1",
+        document_id="doc_1",
+        project_id="p1",
+        file_name="p1_doc1.md",
+        content_hash="hash_p1_1",
+        chunk_count=2,
+        entity_count=2,
+        edge_count=1,
+        version=1,
+        status="active",
+    )
+    await mgr.record_document(
+        tenant_id="org1",
+        document_id="doc_2",
+        project_id="p2",
+        file_name="p2_doc2.md",
+        content_hash="hash_p2_2",
+        chunk_count=3,
+        entity_count=3,
+        edge_count=2,
+        version=1,
+        status="active",
+    )
+    await mgr.record_document(
+        tenant_id="org1",
+        document_id="doc_3",
+        project_id="p1",
+        file_name="p1_doc3.md",
+        content_hash="hash_p1_3",
+        chunk_count=1,
+        entity_count=1,
+        edge_count=0,
+        version=1,
+        status="archived",
+    )
+    await mgr.record_document(
+        tenant_id="org2",
+        document_id="doc_4",
+        project_id="p1",
+        file_name="org2_doc4.md",
+        content_hash="hash_org2_4",
+        chunk_count=2,
+        entity_count=2,
+        edge_count=1,
+        version=1,
+        status="active",
+    )
+
+    # 1. List documents scoped by project
+    docs_p1 = await mgr.list_documents("org1", project_id="p1", status="active")
+    assert len(docs_p1) == 1
+    assert docs_p1[0].document_id == "doc_1"
+    assert docs_p1[0].project_id == "p1"
+
+    docs_p1_all = await mgr.list_documents("org1", project_id="p1", status="all")
+    assert len(docs_p1_all) == 2
+    assert {d.document_id for d in docs_p1_all} == {"doc_1", "doc_3"}
+
+    # 2. List documents cross-project (tenant-wide)
+    docs_org1 = await mgr.list_documents("org1", project_id=None, status="active")
+    assert len(docs_org1) == 2
+    assert {d.document_id for d in docs_org1} == {"doc_1", "doc_2"}
+
+    # 3. Stats scoped by project vs tenant-wide
+    stats_p1 = await mgr.get_tenant_stats("org1", project_id="p1")
+    assert stats_p1.project_id == "p1"
+    assert stats_p1.total_documents == 2
+    assert stats_p1.active_documents == 1
+    assert stats_p1.archived_documents == 1
+
+    stats_org1 = await mgr.get_tenant_stats("org1", project_id=None)
+    assert stats_org1.project_id is None
+    assert stats_org1.total_documents == 3
+    assert stats_org1.active_documents == 2
+    assert stats_org1.archived_documents == 1
+
+    # 4. Scoped deletion
+    del_res = await mgr.delete_document("org1", "doc_1", project_id="p1")
+    assert del_res["documents_deleted"] == 1
+
+    # Doc 1 is gone in p1
+    doc_1_check = await mgr.get_document("org1", "doc_1", project_id="p1")
+    assert doc_1_check is None
+
+    # Doc 2 in p2 is untouched
+    doc_2_check = await mgr.get_document("org1", "doc_2", project_id="p2")
+    assert doc_2_check is not None
