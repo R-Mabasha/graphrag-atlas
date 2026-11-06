@@ -1,12 +1,23 @@
 # `graphrag-atlas`
 
-[![PyPI version](https://img.shields.io/pypi/v/graphrag-atlas.svg)](https://pypi.org/project/graphrag-atlas/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+<p align="center">
+  <a href="https://pypi.org/project/graphrag-atlas/"><img src="https://img.shields.io/pypi/v/graphrag-atlas.svg?color=blue" alt="PyPI version" /></a>
+  <a href="https://pepy.tech/project/graphrag-atlas"><img src="https://static.pepy.tech/badge/graphrag-atlas" alt="Downloads" /></a>
+  <a href="https://github.com/R-Mabasha/graphrag-atlas/actions/workflows/ci.yml"><img src="https://github.com/R-Mabasha/graphrag-atlas/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.10+-blue.svg" alt="Python 3.10+" /></a>
+  <a href="https://www.mongodb.com/atlas"><img src="https://img.shields.io/badge/MongoDB%20Atlas-Ready-00ED64?logo=mongodb&logoColor=white" alt="MongoDB Atlas" /></a>
+  <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/code%20style-ruff-000000.svg" alt="Code style: ruff" /></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome" /></a>
+  <a href="https://github.com/R-Mabasha/graphrag-atlas"><img src="https://img.shields.io/github/stars/R-Mabasha/graphrag-atlas?style=social" alt="GitHub Stars" /></a>
+</p>
 
-**Production-grade Single-Store Hybrid GraphRAG on MongoDB Atlas.**
+<p align="center">
+  <strong>Production-grade Single-Store Hybrid GraphRAG on MongoDB Atlas.</strong><br />
+  <em>Unifying BM25 Lexical Search, Dense HNSW Vectors, AST Hierarchies, and Bounded 2-Hop GraphLookup in One Database. Zero Neo4j. Zero Multi-DB Sprawl.</em>
+</p>
 
-`graphrag-atlas` unifies BM25 lexical search, dense vector embeddings, dynamic document hierarchies, and bounded 2-hop knowledge graph expansion using native MongoDB Atlas primitives (`$search`, `$vectorSearch`, `$graphLookup`).
+> **TL;DR:** Stop orchestrating separate vector databases, graph databases, and relational document stores. `graphrag-atlas` gives you an **end-to-end GraphRAG lifecycle** directly inside MongoDB Atlas using native `$search`, `$vectorSearch`, and `$graphLookup` with automatic index provisioning, Hub Guard circuit breaking, two-tier tenancy, and chunk-level diff caching.
 
 <p align="center">
   <img src="assets/architecture.jpg" alt="graphrag-atlas Architecture: Ingestion Pipeline, 8-Stage Hybrid Retrieval Engine, and Single-Store MongoDB Atlas Architecture" width="100%" />
@@ -179,99 +190,39 @@ finance_pack = DomainPack(
 
 ---
 
-## License
+## ⭐ Star History
 
-MIT License. See [LICENSE](LICENSE) for details.
-| **Community Detection** | None | Hierarchical | **Dynamic Leiden Clustering with Atomic Versioning** |
-| **Lifecycle & Pruning** | Manual | Manual | **Content-hashed deduplication, cascading deletes & orphan cleanup** |
-| **Multi-Tenancy** | Application-level | Application-level | **Compound index & aggregation root enforcement** |
+If you find `graphrag-atlas` helpful for your project or enterprise, please consider giving it a star! It helps more developers discover the framework.
+
+<p align="center">
+  <a href="https://star-history.com/#R-Mabasha/graphrag-atlas&Date">
+    <img src="https://api.star-history.com/svg?repos=R-Mabasha/graphrag-atlas&type=Date" alt="Star History Chart" width="70%" />
+  </a>
+</p>
 
 ---
 
-## Installation
+## 🤝 Contributing
 
-```bash
-# Minimal installation (core engine)
-pip install graphrag-atlas
+Contributions are welcome! Please check out [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, guidelines, and PR workflows.
 
-# With OpenAI support
-pip install "graphrag-atlas[openai]"
+---
 
-# With AWS Bedrock support
-pip install "graphrag-atlas[aws]"
+## 📖 Citation
 
-# With all providers and document parsers
-pip install "graphrag-atlas[all]"
+If you use `graphrag-atlas` in academic research, benchmarks, or enterprise applications, please cite:
+
+```bibtex
+@software{graphrag_atlas_2026,
+  author = {R, Mabasha},
+  title = {graphrag-atlas: Single-Store Hybrid GraphRAG on MongoDB Atlas},
+  year = {2026},
+  url = {https://github.com/R-Mabasha/graphrag-atlas}
+}
 ```
 
 ---
 
-## Quickstart
-
-```python
-import asyncio
-from graphrag_atlas import AtlasGraphRAG, GeneralDomainPack
-
-async def main():
-    # 1. Initialize RAG with unified provider resolver
-    # Automatically reads OPENAI_API_KEY from environment
-    rag = AtlasGraphRAG(
-        mongo_uri="mongodb+srv://cluster.mongodb.net/",
-        database="knowledge_base",
-        tenant_field="tenant_id",
-        provider="openai",  # or "aws"
-        domain_pack=GeneralDomainPack()
-    )
-
-    # 2. Deploy Atlas indexes (B-Tree, Multikey, Compound Tenant)
-    await rag.setup_indexes()
-
-    # 3. Ingest documents in-process with automated AST and entity extraction
-    doc_id = await rag.ingest(
-        file_path="./system_architecture.pdf",
-        tenant_id="client_alpha"
-    )
-    print(f"Ingested document: {doc_id}")
-
-    # 4. Hybrid Search across BM25 + Vector + Graph
-    response = await rag.search(
-        query="Which services communicate with the payment processing pipeline?",
-        tenant_id="client_alpha",
-        top_k=5
-    )
-
-    for passage in response.passages:
-        print(f"[{passage.score:.3f}] {passage.text}\n")
-
-    print("Discovered Graph Entities:", response.graph_entities)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
----
-
-## Domain Packs
-
-Domain logic is completely decoupled from the retrieval engine. You can use the built-in `GeneralDomainPack` (zero-shot LLM extraction) or define custom domain rules:
-
-```python
-from graphrag_atlas.domain import DomainPack, RelationSpec
-
-finance_pack = DomainPack(
-    name="finance",
-    ontology=[
-        RelationSpec("SETTLES_VIA", direction="directed"),
-        RelationSpec("POSTS_TO", direction="directed"),
-        RelationSpec("RECONCILES_WITH", direction="undirected"),
-    ],
-    acronyms={"GL": "General Ledger", "AP": "Accounts Payable"},
-    domain_vocabulary={"settlement", "clearing", "ledger", "journal"}
-)
-```
-
----
-
-## License
+## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.

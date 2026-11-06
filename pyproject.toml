@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "graphrag-atlas"
 version = "0.1.0"
-description = "Production-grade Hybrid GraphRAG in a single MongoDB Atlas cluster"
+description = "Production-grade Single-Store Hybrid GraphRAG on MongoDB Atlas: BM25, HNSW Vector Search, and Bounded $graphLookup"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -13,27 +13,44 @@ authors = [
     { name = "Mabasha.R", email = "mabasham52@gmail.com" }
 ]
 keywords = [
-    "mongodb",
-    "atlas",
     "graphrag",
-    "knowledge-graph",
-    "vector-search",
     "rag",
+    "knowledge-graph",
+    "mongodb",
+    "mongodb-atlas",
     "hybrid-search",
-    "llm"
+    "vector-search",
+    "bm25",
+    "reciprocal-rank-fusion",
+    "rrf",
+    "reranker",
+    "semantic-search",
+    "information-retrieval",
+    "llm",
+    "genai",
+    "graph-lookup",
+    "leiden-clustering",
+    "langchain",
+    "llamaindex",
+    "ai-agents"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Topic :: Database"
+    "Topic :: Database",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Text Processing :: Indexing",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search"
 ]
 dependencies = [
     "pydantic>=2.7.0",
@@ -72,9 +89,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/graphrag-atlas/graphrag-atlas"
-Documentation = "https://github.com/graphrag-atlas/graphrag-atlas#readme"
-Repository = "https://github.com/graphrag-atlas/graphrag-atlas"
+Homepage = "https://github.com/R-Mabasha/graphrag-atlas"
+Documentation = "https://github.com/R-Mabasha/graphrag-atlas#readme"
+Repository = "https://github.com/R-Mabasha/graphrag-atlas"
+Issues = "https://github.com/R-Mabasha/graphrag-atlas/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["graphrag_atlas"]

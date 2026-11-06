@@ -35,6 +35,11 @@ jobs:
         run: |
           uv sync --extra all --extra dev
 
+      - name: Code Quality & Linting
+        run: |
+          uv run ruff check graphrag_atlas tests
+          uv run ruff format --check graphrag_atlas tests
+
       - name: Run Test Suite
         env:
           MONGO_URI: "mongodb://admin:password@localhost:27017/?authSource=admin"

@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use graphrag-atlas in your research or applications, please cite it as below."
+authors:
+  - family-names: "R"
+    given-names: "Mabasha"
+    email: "mabasham52@gmail.com"
+title: "graphrag-atlas: Single-Store Hybrid GraphRAG on MongoDB Atlas"
+version: 0.1.0
+date-released: 2026-11-06
+url: "https://github.com/R-Mabasha/graphrag-atlas"
+repository-code: "https://github.com/R-Mabasha/graphrag-atlas"
+keywords:
+  - graphrag
+  - rag
+  - knowledge-graph
+  - mongodb-atlas
+  - hybrid-search
+  - vector-search
+  - bm25
+license: MIT
