@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from pymongo import ASCENDING, DESCENDING, IndexModel
+from pymongo.errors import PyMongoError
 
 from graphrag_atlas.core.database import DatabaseManager
 
@@ -16,7 +17,7 @@ class IndexManager:
         self._db = db_manager
         self._tenant = tenant_field
 
-    async def ensure_indexes(self) -> dict[str, list[str]]:
+    async def ensure_indexes(self, dimension: int = 1536) -> dict[str, list[str]]:
         """Create all required compound indexes for multi-tenant hybrid graph search."""
         results: dict[str, list[str]] = {}
 
@@ -135,6 +136,33 @@ class IndexManager:
         ]
         created_docs = await self._db.documents.create_indexes(doc_indexes)
         results["documents"] = created_docs
+
+        # 5. Atlas Search (Lucene BM25) and Atlas Vector Search (HNSW)
+        if hasattr(self._db.chunks, "create_search_indexes"):
+            try:
+                from pymongo.operations import SearchIndexModel
+
+                search_spec = self.get_atlas_search_index_spec(index_name="default_search")
+                vector_spec = self.get_atlas_vector_index_spec(
+                    dimension=dimension, index_name="default_vector"
+                )
+                search_models = [
+                    SearchIndexModel(
+                        definition=search_spec["definition"],
+                        name=search_spec["name"],
+                        type=search_spec.get("type", "search"),
+                    ),
+                    SearchIndexModel(
+                        definition=vector_spec["definition"],
+                        name=vector_spec["name"],
+                        type=vector_spec.get("type", "vectorSearch"),
+                    ),
+                ]
+                created_search = await self._db.chunks.create_search_indexes(search_models)
+                results["search_indexes"] = list(created_search) if created_search else []
+            except (PyMongoError, TypeError, AttributeError):
+                # Local mock or un-supported tier fallback
+                results["search_indexes"] = []
 
         return results
 

@@ -86,8 +86,8 @@ class AtlasGraphRAG:
         )
 
     async def setup_indexes(self) -> dict[str, list[str]]:
-        """Create and verify all necessary B-Tree, compound tenant, and multikey indexes."""
-        return await self._indexes.ensure_indexes()
+        """Create and verify all necessary B-Tree, compound tenant, multikey, and Atlas Search indexes."""
+        return await self._indexes.ensure_indexes(dimension=self._embedder.dimension)
 
     async def ingest(
         self,
